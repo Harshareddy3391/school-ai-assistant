@@ -1,0 +1,150 @@
+# ==============================
+
+# Python
+
+# ==============================
+
+**pycache**/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environment
+
+venv/
+.venv/
+env/
+
+# ==============================
+
+# Environment & Secrets
+
+# ==============================
+
+.env
+.env.*
+!.env.example
+
+# ==============================
+
+# FastAPI / Application
+
+# ==============================
+
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ==============================
+
+# Uploaded Files
+
+# ==============================
+
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# ==============================
+
+# PDF / Document Files
+
+# ==============================
+
+# Keep sample documents if needed
+
+# Uncomment below if PDFs should NEVER be committed:
+
+# documents/*.pdf
+
+# ==============================
+
+# Database
+
+# ==============================
+
+*.db
+*.sqlite
+*.sqlite3
+
+# ==============================
+
+# Node / React
+
+# ==============================
+
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# ==============================
+
+# Build / Cache
+
+# ==============================
+
+dist/
+build/
+.cache/
+
+# ==============================
+
+# IDE / Editor
+
+# ==============================
+
+.vscode/
+.idea/
+
+# ==============================
+
+# OS Files
+
+# ==============================
+
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==============================
+
+# Testing / Coverage
+
+# ==============================
+
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ==============================
+
+# Jupyter
+
+# ==============================
+
+.ipynb_checkpoints/
+
+# ==============================
+
+# Temporary files
+
+# ==============================
+
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.backup
+*~
+
+# ==============================
+
+# Alembic
+
+# ==============================
+
+# Keep migration files tracked.
+
+# Do NOT ignore the alembic directory.
