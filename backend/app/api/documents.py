@@ -18,6 +18,7 @@ from app.models.school import School
 from app.schemas.document import DocumentResponse
 from app.services.pdf_service import extract_text_from_pdf
 from app.rag.chunking import split_text_into_chunks
+from app.services.embedding_service import generate_embeddings
 
 
 router = APIRouter(
@@ -103,7 +104,22 @@ def upload_document(
                 detail="Could not create text chunks"
             )
 
-        # 7. Create document
+        # 7. Generate embeddings
+        texts = [
+            chunk["content"]
+            for chunk in chunks
+        ]
+
+        embeddings = generate_embeddings(
+            texts
+        )
+
+        if len(embeddings) != len(chunks):
+            raise RuntimeError(
+                "Number of embeddings does not match number of chunks"
+            )
+
+        # 8. Create document
         document = Document(
             school_id=school_id,
             filename=file.filename,
@@ -112,29 +128,36 @@ def upload_document(
         )
 
         db.add(document)
+
+        # Generate document ID before creating chunks
         db.flush()
 
-        # 8. Save chunks
-        for chunk in chunks:
+        # 9. Save chunks + embeddings
+        for chunk, embedding in zip(
+            chunks,
+            embeddings
+        ):
             document_chunk = DocumentChunk(
                 document_id=document.id,
                 school_id=school_id,
                 content=chunk["content"],
-                page_number=chunk["page_number"]
+                page_number=chunk["page_number"],
+                embedding=embedding
             )
 
             db.add(document_chunk)
 
-        # 9. Commit document + chunks
+        # 10. Commit everything
         db.commit()
 
-        # 10. Refresh document
+        # 11. Refresh document
         db.refresh(document)
 
         print(
             f"PDF processed successfully: "
             f"{len(pages)} pages, "
-            f"{len(chunks)} chunks"
+            f"{len(chunks)} chunks, "
+            f"{len(embeddings)} embeddings"
         )
 
         return document
@@ -150,7 +173,7 @@ def upload_document(
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save document and chunks"
+            detail="Failed to save document, chunks, and embeddings"
         )
 
     except Exception:
