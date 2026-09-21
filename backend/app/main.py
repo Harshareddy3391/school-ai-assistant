@@ -2,6 +2,7 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.api.schools import router as school_router
+from app.api.documents import router as document_router
 
 
 app = FastAPI(
@@ -11,6 +12,7 @@ app = FastAPI(
 
 
 app.include_router(school_router)
+app.include_router(document_router)
 
 
 @app.get("/")
@@ -26,4 +28,3 @@ def health_check():
     return {
         "status": "healthy"
     }
-
