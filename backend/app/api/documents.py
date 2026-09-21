@@ -13,10 +13,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.document import Document
+from app.models.document import Document, DocumentChunk
 from app.models.school import School
 from app.schemas.document import DocumentResponse
 from app.services.pdf_service import extract_text_from_pdf
+from app.rag.chunking import split_text_into_chunks
 
 
 router = APIRouter(
@@ -43,7 +44,7 @@ def upload_document(
     file_path = None
 
     try:
-        # Check school
+        # 1. Check school
         school = db.get(
             School,
             school_id
@@ -55,14 +56,14 @@ def upload_document(
                 detail="School not found"
             )
 
-        # Check PDF
+        # 2. Check PDF
         if file.content_type != "application/pdf":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Only PDF files are allowed"
             )
 
-        # Generate unique filename
+        # 3. Generate unique filename
         unique_filename = (
             f"{uuid.uuid4()}_{file.filename}"
         )
@@ -72,12 +73,14 @@ def upload_document(
             unique_filename
         )
 
-        # Save PDF
+        # 4. Save PDF
         with open(file_path, "wb") as buffer:
             buffer.write(file.file.read())
 
-        # Extract PDF text
-        pages = extract_text_from_pdf(file_path)
+        # 5. Extract text
+        pages = extract_text_from_pdf(
+            file_path
+        )
 
         if not pages:
             os.remove(file_path)
@@ -87,7 +90,20 @@ def upload_document(
                 detail="Could not extract text from PDF"
             )
 
-        # Create document record
+        # 6. Create chunks
+        chunks = split_text_into_chunks(
+            pages
+        )
+
+        if not chunks:
+            os.remove(file_path)
+
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not create text chunks"
+            )
+
+        # 7. Create document
         document = Document(
             school_id=school_id,
             filename=file.filename,
@@ -96,8 +112,30 @@ def upload_document(
         )
 
         db.add(document)
+        db.flush()
+
+        # 8. Save chunks
+        for chunk in chunks:
+            document_chunk = DocumentChunk(
+                document_id=document.id,
+                school_id=school_id,
+                content=chunk["content"],
+                page_number=chunk["page_number"]
+            )
+
+            db.add(document_chunk)
+
+        # 9. Commit document + chunks
         db.commit()
+
+        # 10. Refresh document
         db.refresh(document)
+
+        print(
+            f"PDF processed successfully: "
+            f"{len(pages)} pages, "
+            f"{len(chunks)} chunks"
+        )
 
         return document
 
@@ -112,7 +150,7 @@ def upload_document(
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save document"
+            detail="Failed to save document and chunks"
         )
 
     except Exception:
