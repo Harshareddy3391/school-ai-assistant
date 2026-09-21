@@ -16,6 +16,7 @@ from app.core.database import get_db
 from app.models.document import Document
 from app.models.school import School
 from app.schemas.document import DocumentResponse
+from app.services.pdf_service import extract_text_from_pdf
 
 
 router = APIRouter(
@@ -39,8 +40,10 @@ def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
+    file_path = None
+
     try:
-        # Check whether school exists
+        # Check school
         school = db.get(
             School,
             school_id
@@ -52,7 +55,7 @@ def upload_document(
                 detail="School not found"
             )
 
-        # Check PDF file
+        # Check PDF
         if file.content_type != "application/pdf":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -69,9 +72,20 @@ def upload_document(
             unique_filename
         )
 
-        # Save PDF file
+        # Save PDF
         with open(file_path, "wb") as buffer:
             buffer.write(file.file.read())
+
+        # Extract PDF text
+        pages = extract_text_from_pdf(file_path)
+
+        if not pages:
+            os.remove(file_path)
+
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Could not extract text from PDF"
+            )
 
         # Create document record
         document = Document(
@@ -93,8 +107,7 @@ def upload_document(
     except SQLAlchemyError:
         db.rollback()
 
-        # Remove uploaded file if database operation fails
-        if os.path.exists(file_path):
+        if file_path and os.path.exists(file_path):
             os.remove(file_path)
 
         raise HTTPException(
@@ -105,13 +118,10 @@ def upload_document(
     except Exception:
         db.rollback()
 
-        if "file_path" in locals() and os.path.exists(file_path):
+        if file_path and os.path.exists(file_path):
             os.remove(file_path)
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unexpected error while uploading document"
+            detail="Failed to process PDF"
         )
-
-
-    
