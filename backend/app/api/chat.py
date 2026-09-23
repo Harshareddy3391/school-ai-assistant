@@ -1,4 +1,10 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+
+from app.core.database import get_db
+from app.serfrom fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -49,7 +55,10 @@ def chat(
     if not hybrid_results:
         return ChatResponse(
             question=request.question,
-            answer="I couldn't find this information in the school's documents.",
+            answer=(
+                "I couldn't find this information "
+                "in the school's documents."
+            ),
             sources=[]
         )
 
