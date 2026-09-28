@@ -5,37 +5,61 @@ from sqlalchemy.orm import Session
 def vector_similarity_search(
     db: Session,
     query_embedding: list[float],
-    school_id: int,
+    school_id: int | None = None,
     top_k: int = 5
 ) -> list[dict]:
 
-    sql = text("""
-        SELECT
-            id,
-            document_id,
-            school_id,
-            content,
-            page_number,
-            section,
-            metadata_json,
-            1 - (
-                embedding <=> CAST(:query_embedding AS vector)
-            ) AS similarity
-        FROM document_chunks
-        WHERE school_id = :school_id
-          AND embedding IS NOT NULL
-        ORDER BY embedding <=> CAST(:query_embedding AS vector)
-        LIMIT :top_k
-    """)
+    if school_id is None:
+        sql = text("""
+            SELECT
+                id,
+                document_id,
+                school_id,
+                content,
+                page_number,
+                section,
+                metadata_json,
+                1 - (
+                    embedding <=> CAST(:query_embedding AS vector)
+                ) AS similarity
+            FROM document_chunks
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:query_embedding AS vector)
+            LIMIT :top_k
+        """)
 
-    result = db.execute(
-        sql,
-        {
+        params = {
+            "query_embedding": str(query_embedding),
+            "top_k": top_k
+        }
+
+    else:
+        sql = text("""
+            SELECT
+                id,
+                document_id,
+                school_id,
+                content,
+                page_number,
+                section,
+                metadata_json,
+                1 - (
+                    embedding <=> CAST(:query_embedding AS vector)
+                ) AS similarity
+            FROM document_chunks
+            WHERE school_id = :school_id
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:query_embedding AS vector)
+            LIMIT :top_k
+        """)
+
+        params = {
             "query_embedding": str(query_embedding),
             "school_id": school_id,
             "top_k": top_k
         }
-    )
+
+    result = db.execute(sql, params)
 
     rows = result.mappings().all()
 
@@ -45,39 +69,65 @@ def vector_similarity_search(
 def keyword_search(
     db: Session,
     query: str,
-    school_id: int,
+    school_id: int | None = None,
     top_k: int = 5
 ) -> list[dict]:
 
-    sql = text("""
-        SELECT
-            id,
-            document_id,
-            school_id,
-            content,
-            page_number,
-            section,
-            metadata_json,
-            ts_rank(
-                to_tsvector('english', content),
-                plainto_tsquery('english', :query)
-            ) AS keyword_score
-        FROM document_chunks
-        WHERE school_id = :school_id
-          AND to_tsvector('english', content)
-              @@ plainto_tsquery('english', :query)
-        ORDER BY keyword_score DESC
-        LIMIT :top_k
-    """)
+    if school_id is None:
+        sql = text("""
+            SELECT
+                id,
+                document_id,
+                school_id,
+                content,
+                page_number,
+                section,
+                metadata_json,
+                ts_rank(
+                    to_tsvector('english', content),
+                    plainto_tsquery('english', :query)
+                ) AS keyword_score
+            FROM document_chunks
+            WHERE to_tsvector('english', content)
+                  @@ plainto_tsquery('english', :query)
+            ORDER BY keyword_score DESC
+            LIMIT :top_k
+        """)
 
-    result = db.execute(
-        sql,
-        {
+        params = {
+            "query": query,
+            "top_k": top_k
+        }
+
+    else:
+        sql = text("""
+            SELECT
+                id,
+                document_id,
+                school_id,
+                content,
+                page_number,
+                section,
+                metadata_json,
+                ts_rank(
+                    to_tsvector('english', content),
+                    plainto_tsquery('english', :query)
+                ) AS keyword_score
+            FROM document_chunks
+            WHERE school_id = :school_id
+              AND to_tsvector('english', content)
+                  @@ plainto_tsquery('english', :query)
+            ORDER BY keyword_score DESC
+            LIMIT :top_k
+        """)
+
+        params = {
             "query": query,
             "school_id": school_id,
             "top_k": top_k
         }
-    )
+
+    result = db.execute(sql, params)
 
     rows = result.mappings().all()
 
@@ -88,7 +138,7 @@ def hybrid_search(
     db: Session,
     query: str,
     query_embedding: list[float],
-    school_id: int,
+    school_id: int | None = None,
     top_k: int = 5
 ) -> list[dict]:
 
