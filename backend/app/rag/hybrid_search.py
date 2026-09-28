@@ -6,10 +6,12 @@ def vector_similarity_search(
     db: Session,
     query_embedding: list[float],
     school_id: int | None = None,
+    school_ids: list[int] | None = None,
     top_k: int = 5
 ) -> list[dict]:
 
-    if school_id is None:
+    if school_ids:
+
         sql = text("""
             SELECT
                 id,
@@ -23,17 +25,20 @@ def vector_similarity_search(
                     embedding <=> CAST(:query_embedding AS vector)
                 ) AS similarity
             FROM document_chunks
-            WHERE embedding IS NOT NULL
+            WHERE school_id = ANY(:school_ids)
+              AND embedding IS NOT NULL
             ORDER BY embedding <=> CAST(:query_embedding AS vector)
             LIMIT :top_k
         """)
 
         params = {
             "query_embedding": str(query_embedding),
+            "school_ids": school_ids,
             "top_k": top_k
         }
 
-    else:
+    elif school_id is not None:
+
         sql = text("""
             SELECT
                 id,
@@ -59,21 +64,54 @@ def vector_similarity_search(
             "top_k": top_k
         }
 
-    result = db.execute(sql, params)
+    else:
+
+        sql = text("""
+            SELECT
+                id,
+                document_id,
+                school_id,
+                content,
+                page_number,
+                section,
+                metadata_json,
+                1 - (
+                    embedding <=> CAST(:query_embedding AS vector)
+                ) AS similarity
+            FROM document_chunks
+            WHERE embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:query_embedding AS vector)
+            LIMIT :top_k
+        """)
+
+        params = {
+            "query_embedding": str(query_embedding),
+            "top_k": top_k
+        }
+
+    result = db.execute(
+        sql,
+        params
+    )
 
     rows = result.mappings().all()
 
-    return [dict(row) for row in rows]
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 def keyword_search(
     db: Session,
     query: str,
     school_id: int | None = None,
+    school_ids: list[int] | None = None,
     top_k: int = 5
 ) -> list[dict]:
 
-    if school_id is None:
+    if school_ids:
+
         sql = text("""
             SELECT
                 id,
@@ -88,7 +126,8 @@ def keyword_search(
                     plainto_tsquery('english', :query)
                 ) AS keyword_score
             FROM document_chunks
-            WHERE to_tsvector('english', content)
+            WHERE school_id = ANY(:school_ids)
+              AND to_tsvector('english', content)
                   @@ plainto_tsquery('english', :query)
             ORDER BY keyword_score DESC
             LIMIT :top_k
@@ -96,10 +135,12 @@ def keyword_search(
 
         params = {
             "query": query,
+            "school_ids": school_ids,
             "top_k": top_k
         }
 
-    else:
+    elif school_id is not None:
+
         sql = text("""
             SELECT
                 id,
@@ -127,11 +168,44 @@ def keyword_search(
             "top_k": top_k
         }
 
-    result = db.execute(sql, params)
+    else:
+
+        sql = text("""
+            SELECT
+                id,
+                document_id,
+                school_id,
+                content,
+                page_number,
+                section,
+                metadata_json,
+                ts_rank(
+                    to_tsvector('english', content),
+                    plainto_tsquery('english', :query)
+                ) AS keyword_score
+            FROM document_chunks
+            WHERE to_tsvector('english', content)
+                  @@ plainto_tsquery('english', :query)
+            ORDER BY keyword_score DESC
+            LIMIT :top_k
+        """)
+
+        params = {
+            "query": query,
+            "top_k": top_k
+        }
+
+    result = db.execute(
+        sql,
+        params
+    )
 
     rows = result.mappings().all()
 
-    return [dict(row) for row in rows]
+    return [
+        dict(row)
+        for row in rows
+    ]
 
 
 def hybrid_search(
@@ -139,6 +213,7 @@ def hybrid_search(
     query: str,
     query_embedding: list[float],
     school_id: int | None = None,
+    school_ids: list[int] | None = None,
     top_k: int = 5
 ) -> list[dict]:
 
@@ -146,6 +221,7 @@ def hybrid_search(
         db=db,
         query_embedding=query_embedding,
         school_id=school_id,
+        school_ids=school_ids,
         top_k=top_k
     )
 
@@ -153,32 +229,44 @@ def hybrid_search(
         db=db,
         query=query,
         school_id=school_id,
+        school_ids=school_ids,
         top_k=top_k
     )
 
     combined_results = {}
 
     for result in vector_results:
+
         chunk_id = result["id"]
 
         combined_results[chunk_id] = {
             **result,
-            "vector_score": float(result["similarity"]),
+            "vector_score": float(
+                result["similarity"]
+            ),
             "keyword_score": 0.0
         }
 
     for result in keyword_results:
+
         chunk_id = result["id"]
 
         if chunk_id in combined_results:
-            combined_results[chunk_id]["keyword_score"] = float(
+
+            combined_results[
+                chunk_id
+            ]["keyword_score"] = float(
                 result["keyword_score"]
             )
+
         else:
+
             combined_results[chunk_id] = {
                 **result,
                 "vector_score": 0.0,
-                "keyword_score": float(result["keyword_score"])
+                "keyword_score": float(
+                    result["keyword_score"]
+                )
             }
 
     max_keyword_score = max(
@@ -190,15 +278,20 @@ def hybrid_search(
     )
 
     if max_keyword_score > 0:
+
         for result in combined_results.values():
+
             result["keyword_score"] = (
-                result["keyword_score"] / max_keyword_score
+                result["keyword_score"]
+                / max_keyword_score
             )
 
     for result in combined_results.values():
+
         result["hybrid_score"] = (
             0.7 * result["vector_score"]
-            + 0.3 * result["keyword_score"]
+            +
+            0.3 * result["keyword_score"]
         )
 
     ranked_results = sorted(

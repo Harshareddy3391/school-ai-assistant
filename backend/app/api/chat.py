@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+
 from app.schemas.chat import (
     ChatRequest,
     ChatResponse,
@@ -13,6 +14,8 @@ from app.models.school import School
 
 from app.services.embedding_service import generate_embedding
 from app.services.school_service import resolve_school
+from app.services.school_list_service import get_schools_by_city
+from app.services.intent_router import detect_intent, Intent
 
 from app.rag.query_rewriter import rewrite_query
 from app.rag.hybrid_search import hybrid_search
@@ -34,6 +37,10 @@ router = APIRouter(
 conversation_memory: dict[str, list[dict[str, str]]] = {}
 
 
+# ============================================================
+# CHAT ENDPOINT
+# ============================================================
+
 @router.post("/", response_model=ChatResponse)
 def chat(
     request: ChatRequest,
@@ -49,13 +56,27 @@ def chat(
         []
     )
 
+
+    # ========================================================
+    # 2. DETECT INTENT
+    # ========================================================
+
+    intent = detect_intent(
+        request.question
+    )
+
+    print("\n========== INTENT ==========")
+    print("Question:", request.question)
+    print("Intent:", intent.value)
+
+
     print("\n========== SESSION ==========")
     print("Session ID:", request.session_id)
     print("Previous Messages:", len(history))
 
 
     # ========================================================
-    # 2. BUILD CONVERSATION CONTEXT
+    # 3. BUILD CONVERSATION CONTEXT
     # ========================================================
 
     conversation_context = ""
@@ -67,23 +88,30 @@ def chat(
         for message in history:
 
             conversation_parts.append(
-                f"{message['role'].upper()}: {message['content']}"
+                f"{message['role'].upper()}: "
+                f"{message['content']}"
             )
 
         conversation_context = "\n".join(
             conversation_parts
         )
 
-    print("\n========== CONVERSATION HISTORY ==========")
+
+    print(
+        "\n========== CONVERSATION HISTORY =========="
+    )
 
     if conversation_context:
+
         print(conversation_context)
+
     else:
+
         print("No previous conversation")
 
 
     # ========================================================
-    # 3. TRY TO IDENTIFY SPECIFIC SCHOOL
+    # 4. TRY TO IDENTIFY SPECIFIC SCHOOL
     # ========================================================
 
     school = resolve_school(
@@ -91,11 +119,21 @@ def chat(
         question=request.question
     )
 
-    school_id = school.id if school else None
+    school_id = (
+        school.id
+        if school
+        else None
+    )
+
+    school_name = (
+        school.name
+        if school
+        else None
+    )
 
 
-    # ========================================================
-    # 4. BUILD QUERY FOR REWRITING
+        # ========================================================
+    # 5. BUILD QUERY FOR REWRITING
     # ========================================================
 
     if conversation_context:
@@ -116,19 +154,22 @@ Current user question:
 
 
     # ========================================================
-    # 5. QUERY REWRITING
+    # 6. QUERY REWRITING
     # ========================================================
 
     rewritten_query = rewrite_query(
         rewrite_input
     )
 
-    print("\n========== REWRITTEN QUERY ==========")
+    print(
+        "\n========== REWRITTEN QUERY =========="
+    )
+
     print(rewritten_query)
 
 
     # ========================================================
-    # 6. GENERATE QUERY EMBEDDING
+    # 7. GENERATE QUERY EMBEDDING
     # ========================================================
 
     query_embedding = generate_embedding(
@@ -137,26 +178,131 @@ Current user question:
 
 
     # ========================================================
-    # 7. HYBRID SEARCH
-    #
-    # school_id exists:
-    #     Search specific school
-    #
-    # school_id is None:
-    #     Search ALL school PDFs
+    # 8. SQL + RAG / NORMAL RAG
     # ========================================================
 
-    hybrid_results = hybrid_search(
-        db=db,
-        query=rewritten_query,
-        query_embedding=query_embedding,
-        school_id=school_id,
-        top_k=10
-    )
+    if intent == Intent.SQL_AND_RAG:
+
+        print(
+            "\n========== SQL + RAG ROUTE =========="
+        )
+
+        # ---------------------------------------------
+        # Find city from question
+        # ---------------------------------------------
+
+        cities = (
+            db.query(School.city)
+            .filter(
+                School.city.isnot(None)
+            )
+            .distinct()
+            .all()
+        )
+
+        question_lower = (
+            request.question.lower()
+        )
+
+        detected_city = None
+
+        for city_row in cities:
+
+            city = city_row[0]
+
+            if (
+                city
+                and city.lower()
+                in question_lower
+            ):
+
+                detected_city = city
+
+                break
 
 
-    # ========================================================
-    # 8. NO RESULTS
+        # ---------------------------------------------
+        # Get schools using SQL
+        # ---------------------------------------------
+
+        if detected_city:
+
+            schools = get_schools_by_city(
+                db=db,
+                city=detected_city
+            )
+
+        else:
+
+            schools = (
+                db.query(School)
+                .order_by(School.name)
+                .all()
+            )
+
+
+        # ---------------------------------------------
+        # Get school IDs
+        # ---------------------------------------------
+
+        sql_school_ids = [
+            school_item.id
+            for school_item in schools
+        ]
+
+
+        print(
+            "\n========== SQL SCHOOL IDS =========="
+        )
+
+        print(sql_school_ids)
+
+
+        # ---------------------------------------------
+        # RAG only for SQL-selected schools
+        # ---------------------------------------------
+
+        if sql_school_ids:
+
+            hybrid_results = hybrid_search(
+                db=db,
+                query=rewritten_query,
+                query_embedding=query_embedding,
+                school_ids=sql_school_ids,
+                top_k=10
+            )
+
+        else:
+
+            hybrid_results = []
+
+
+    else:
+
+        print(
+            "\n========== RAG ROUTE =========="
+        )
+
+        # ---------------------------------------------
+        # Normal RAG
+        #
+        # Specific school → that school
+        # No school → all schools
+        # ---------------------------------------------
+
+        hybrid_results = hybrid_search(
+            db=db,
+            query=rewritten_query,
+            query_embedding=query_embedding,
+            school_id=school_id,
+            top_k=10
+        )
+
+
+
+
+            # ========================================================
+    # 9. NO RESULTS
     # ========================================================
 
     if not hybrid_results:
@@ -166,46 +312,26 @@ Current user question:
             "available school documents."
         )
 
-        # Save conversation
-        conversation_memory.setdefault(
+
+        _save_conversation(
             request.session_id,
-            []
+            request.question,
+            llm_response
         )
 
-        conversation_memory[
-            request.session_id
-        ].append(
-            {
-                "role": "user",
-                "content": request.question
-            }
-        )
-
-        conversation_memory[
-            request.session_id
-        ].append(
-            {
-                "role": "assistant",
-                "content": llm_response
-            }
-        )
 
         return ChatResponse(
             question=request.question,
             rag_results=[],
             llm_response=llm_response,
             school_id=school_id,
-            school_name=(
-                school.name
-                if school
-                else None
-            ),
+            school_name=school_name,
             sources=[]
         )
 
 
     # ========================================================
-    # 9. RERANKING
+    # 10. RERANKING
     # ========================================================
 
     reranked_results = rerank_chunks(
@@ -216,7 +342,7 @@ Current user question:
 
 
     # ========================================================
-    # 10. BUILD RAG CONTEXT
+    # 11. BUILD RAG CONTEXT
     # ========================================================
 
     context = build_context(
@@ -226,10 +352,12 @@ Current user question:
 
 
     # ========================================================
-    # DEBUG INFORMATION
+    # 12. DEBUG INFORMATION
     # ========================================================
 
-    print("\n========== SCHOOL ==========")
+    print(
+        "\n========== SCHOOL =========="
+    )
 
     if school:
 
@@ -250,7 +378,7 @@ Current user question:
         )
 
         print(
-            "Searching ALL school PDFs"
+            "Searching selected/all school PDFs"
         )
 
 
@@ -315,7 +443,7 @@ Current user question:
 
 
     # ========================================================
-    # 11. GENERATE LLM RESPONSE
+    # 13. GENERATE LLM RESPONSE
     # ========================================================
 
     llm_response = generate_answer(
@@ -324,8 +452,9 @@ Current user question:
     )
 
 
-    # ========================================================
-    # 12. BUILD RAG RESULTS
+
+        # ========================================================
+    # 14. BUILD RAG RESULTS
     # ========================================================
 
     rag_results = []
@@ -375,7 +504,7 @@ Current user question:
 
 
     # ========================================================
-    # 13. BUILD SOURCES
+    # 15. BUILD SOURCES
     # ========================================================
 
     sources = [
@@ -400,56 +529,21 @@ Current user question:
 
 
     # ========================================================
-    # 14. SAVE CURRENT CONVERSATION
+    # 16. SAVE CURRENT CONVERSATION
     # ========================================================
 
-    conversation_memory.setdefault(
+    _save_conversation(
         request.session_id,
-        []
-    )
-
-
-    conversation_memory[
-        request.session_id
-    ].append(
-        {
-            "role": "user",
-            "content": request.question
-        }
-    )
-
-
-    conversation_memory[
-        request.session_id
-    ].append(
-        {
-            "role": "assistant",
-            "content": llm_response
-        }
+        request.question,
+        llm_response
     )
 
 
     # ========================================================
-    # 15. LIMIT TEMPORARY MEMORY
-    # ========================================================
-
-    # Keep only the latest 10 messages
-    # to prevent the conversation context
-    # from becoming too large.
-
-    conversation_memory[
-        request.session_id
-    ] = conversation_memory[
-        request.session_id
-    ][-10:]
-
-
-    # ========================================================
-    # 16. FINAL RESPONSE
+    # 17. FINAL RESPONSE
     # ========================================================
 
     return ChatResponse(
-
         question=request.question,
 
         # Actual information retrieved from PDFs
@@ -460,11 +554,52 @@ Current user question:
 
         school_id=school_id,
 
-        school_name=(
-            school.name
-            if school
-            else None
-        ),
+        school_name=school_name,
 
         sources=sources
     )
+
+
+# ============================================================
+# SAVE TEMPORARY CONVERSATION
+# ============================================================
+
+def _save_conversation(
+    session_id: str,
+    question: str,
+    answer: str
+):
+
+    conversation_memory.setdefault(
+        session_id,
+        []
+    )
+
+
+    conversation_memory[
+        session_id
+    ].append(
+        {
+            "role": "user",
+            "content": question
+        }
+    )
+
+
+    conversation_memory[
+        session_id
+    ].append(
+        {
+            "role": "assistant",
+            "content": answer
+        }
+    )
+
+
+    # Keep latest 10 messages
+
+    conversation_memory[
+        session_id
+    ] = conversation_memory[
+        session_id
+    ][-10:]
