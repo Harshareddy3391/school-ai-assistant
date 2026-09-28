@@ -2,7 +2,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.schemas.chat import ChatRequest, ChatResponse, ChatSource
+from app.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    ChatSource,
+    RAGResult
+)
+
+from app.models.school import School
 
 from app.services.embedding_service import generate_embedding
 from app.services.school_service import resolve_school
@@ -20,13 +27,65 @@ router = APIRouter(
 )
 
 
+# ============================================================
+# TEMPORARY CONVERSATION MEMORY
+# ============================================================
+
+conversation_memory: dict[str, list[dict[str, str]]] = {}
+
+
 @router.post("/", response_model=ChatResponse)
 def chat(
     request: ChatRequest,
     db: Session = Depends(get_db)
 ):
-    # 1. Try to identify a specific school.
-    #    If no school is mentioned, we will search all school PDFs.
+
+    # ========================================================
+    # 1. GET CURRENT CONVERSATION HISTORY
+    # ========================================================
+
+    history = conversation_memory.get(
+        request.session_id,
+        []
+    )
+
+    print("\n========== SESSION ==========")
+    print("Session ID:", request.session_id)
+    print("Previous Messages:", len(history))
+
+
+    # ========================================================
+    # 2. BUILD CONVERSATION CONTEXT
+    # ========================================================
+
+    conversation_context = ""
+
+    if history:
+
+        conversation_parts = []
+
+        for message in history:
+
+            conversation_parts.append(
+                f"{message['role'].upper()}: {message['content']}"
+            )
+
+        conversation_context = "\n".join(
+            conversation_parts
+        )
+
+    print("\n========== CONVERSATION HISTORY ==========")
+
+    if conversation_context:
+        print(conversation_context)
+    else:
+        print("No previous conversation")
+
+
+    # ========================================================
+    # 3. TRY TO IDENTIFY SPECIFIC SCHOOL
+    # ========================================================
+
     school = resolve_school(
         db=db,
         question=request.question
@@ -34,23 +93,59 @@ def chat(
 
     school_id = school.id if school else None
 
-    # 2. Rewrite the user's question for better retrieval
+
+    # ========================================================
+    # 4. BUILD QUERY FOR REWRITING
+    # ========================================================
+
+    if conversation_context:
+
+        rewrite_input = f"""
+Previous conversation:
+
+{conversation_context}
+
+Current user question:
+
+{request.question}
+"""
+
+    else:
+
+        rewrite_input = request.question
+
+
+    # ========================================================
+    # 5. QUERY REWRITING
+    # ========================================================
+
     rewritten_query = rewrite_query(
-        request.question
+        rewrite_input
     )
 
-    # 3. Generate embedding from the rewritten query
+    print("\n========== REWRITTEN QUERY ==========")
+    print(rewritten_query)
+
+
+    # ========================================================
+    # 6. GENERATE QUERY EMBEDDING
+    # ========================================================
+
     query_embedding = generate_embedding(
         rewritten_query
     )
 
-    # 4. Hybrid search
+
+    # ========================================================
+    # 7. HYBRID SEARCH
     #
-    # If school_id exists:
-    #     Search only that school's document chunks.
+    # school_id exists:
+    #     Search specific school
     #
-    # If school_id is None:
-    #     Search ALL school document chunks.
+    # school_id is None:
+    #     Search ALL school PDFs
+    # ========================================================
+
     hybrid_results = hybrid_search(
         db=db,
         query=rewritten_query,
@@ -59,83 +154,317 @@ def chat(
         top_k=10
     )
 
-    # 5. No relevant information found
+
+    # ========================================================
+    # 8. NO RESULTS
+    # ========================================================
+
     if not hybrid_results:
+
+        llm_response = (
+            "I couldn't find this information in the "
+            "available school documents."
+        )
+
+        # Save conversation
+        conversation_memory.setdefault(
+            request.session_id,
+            []
+        )
+
+        conversation_memory[
+            request.session_id
+        ].append(
+            {
+                "role": "user",
+                "content": request.question
+            }
+        )
+
+        conversation_memory[
+            request.session_id
+        ].append(
+            {
+                "role": "assistant",
+                "content": llm_response
+            }
+        )
+
         return ChatResponse(
             question=request.question,
-            answer=(
-                "I couldn't find this information in the available "
-                "school documents."
-            ),
+            rag_results=[],
+            llm_response=llm_response,
             school_id=school_id,
-            school_name=school.name if school else None,
+            school_name=(
+                school.name
+                if school
+                else None
+            ),
             sources=[]
         )
 
-    # 6. Reranking
+
+    # ========================================================
+    # 9. RERANKING
+    # ========================================================
+
     reranked_results = rerank_chunks(
         query=rewritten_query,
         chunks=hybrid_results,
         top_k=5
     )
 
-    # 7. Build context
+
+    # ========================================================
+    # 10. BUILD RAG CONTEXT
+    # ========================================================
+
     context = build_context(
         chunks=reranked_results,
         max_chunks=5
     )
 
-    # Debug information
+
+    # ========================================================
+    # DEBUG INFORMATION
+    # ========================================================
+
     print("\n========== SCHOOL ==========")
 
     if school:
-        print("School ID:", school.id)
-        print("School Name:", school.name)
+
+        print(
+            "School ID:",
+            school.id
+        )
+
+        print(
+            "School Name:",
+            school.name
+        )
+
     else:
-        print("No specific school identified")
-        print("Searching ALL school PDFs")
 
-    print("\n========== REWRITTEN QUERY ==========")
-    print(rewritten_query)
+        print(
+            "No specific school identified"
+        )
 
-    print("\n========== RERANKED RESULTS ==========")
+        print(
+            "Searching ALL school PDFs"
+        )
+
+
+    print(
+        "\n========== RERANKED RESULTS =========="
+    )
+
 
     for chunk in reranked_results:
-        print("School ID:", chunk.get("school_id"))
-        print("Document ID:", chunk.get("document_id"))
-        print("Page:", chunk.get("page_number"))
-        print("Score:", chunk.get("rerank_score"))
+
+        print(
+            "School ID:",
+            chunk.get("school_id")
+        )
+
+        print(
+            "Document ID:",
+            chunk.get("document_id")
+        )
+
+        print(
+            "Page:",
+            chunk.get("page_number")
+        )
+
+        print(
+            "Vector Score:",
+            chunk.get("vector_score")
+        )
+
+        print(
+            "Keyword Score:",
+            chunk.get("keyword_score")
+        )
+
+        print(
+            "Hybrid Score:",
+            chunk.get("hybrid_score")
+        )
+
+        print(
+            "Rerank Score:",
+            chunk.get("rerank_score")
+        )
+
         print("Content:")
-        print(chunk.get("content"))
+
+        print(
+            chunk.get("content")
+        )
+
         print("-" * 80)
 
-    print("\n========== FINAL CONTEXT ==========")
+
+    print(
+        "\n========== FINAL CONTEXT =========="
+    )
+
     print(context)
 
     print("=" * 80)
 
-    # 8. Generate answer using the ORIGINAL user question
-    answer = generate_answer(
+
+    # ========================================================
+    # 11. GENERATE LLM RESPONSE
+    # ========================================================
+
+    llm_response = generate_answer(
         question=request.question,
         context=context
     )
 
-    # 9. Build sources
+
+    # ========================================================
+    # 12. BUILD RAG RESULTS
+    # ========================================================
+
+    rag_results = []
+
+    for chunk in reranked_results:
+
+        chunk_school = db.get(
+            School,
+            chunk["school_id"]
+        )
+
+        rag_results.append(
+            RAGResult(
+                school_id=chunk["school_id"],
+
+                school_name=(
+                    chunk_school.name
+                    if chunk_school
+                    else None
+                ),
+
+                document_id=chunk["document_id"],
+
+                page_number=(
+                    chunk.get("page_number")
+                ),
+
+                content=chunk["content"],
+
+                vector_score=(
+                    chunk.get("vector_score")
+                ),
+
+                keyword_score=(
+                    chunk.get("keyword_score")
+                ),
+
+                hybrid_score=(
+                    chunk.get("hybrid_score")
+                ),
+
+                rerank_score=(
+                    chunk.get("rerank_score")
+                )
+            )
+        )
+
+
+    # ========================================================
+    # 13. BUILD SOURCES
+    # ========================================================
+
     sources = [
+
         ChatSource(
             document_id=chunk["document_id"],
-            page_number=chunk.get("page_number"),
+
+            page_number=(
+                chunk.get("page_number")
+            ),
+
             school_id=chunk["school_id"],
-            rerank_score=chunk.get("rerank_score")
+
+            rerank_score=(
+                chunk.get("rerank_score")
+            )
         )
+
         for chunk in reranked_results
+
     ]
 
-    # 10. Return response
+
+    # ========================================================
+    # 14. SAVE CURRENT CONVERSATION
+    # ========================================================
+
+    conversation_memory.setdefault(
+        request.session_id,
+        []
+    )
+
+
+    conversation_memory[
+        request.session_id
+    ].append(
+        {
+            "role": "user",
+            "content": request.question
+        }
+    )
+
+
+    conversation_memory[
+        request.session_id
+    ].append(
+        {
+            "role": "assistant",
+            "content": llm_response
+        }
+    )
+
+
+    # ========================================================
+    # 15. LIMIT TEMPORARY MEMORY
+    # ========================================================
+
+    # Keep only the latest 10 messages
+    # to prevent the conversation context
+    # from becoming too large.
+
+    conversation_memory[
+        request.session_id
+    ] = conversation_memory[
+        request.session_id
+    ][-10:]
+
+
+    # ========================================================
+    # 16. FINAL RESPONSE
+    # ========================================================
+
     return ChatResponse(
+
         question=request.question,
-        answer=answer,
+
+        # Actual information retrieved from PDFs
+        rag_results=rag_results,
+
+        # AI generated response
+        llm_response=llm_response,
+
         school_id=school_id,
-        school_name=school.name if school else None,
+
+        school_name=(
+            school.name
+            if school
+            else None
+        ),
+
         sources=sources
     )
