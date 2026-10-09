@@ -1,10 +1,6 @@
-from app.models.school import School
-from app.models.document import Document, DocumentChunk
-from app.models.user import User
+
+from app.models.school import SchoolKnowledge
 
 __all__ = [
-    "School",
-    "Document",
-    "DocumentChunk",
-    "User",
+    "SchoolKnowledge",
 ]
