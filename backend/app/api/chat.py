@@ -544,20 +544,14 @@ Current user question:
     # ========================================================
 
     return ChatResponse(
-        question=request.question,
-
-        # Actual information retrieved from PDFs
-        rag_results=rag_results,
-
-        # AI generated response
-        llm_response=llm_response,
-
-        school_id=school_id,
-
-        school_name=school_name,
-
-        sources=sources
-    )
+    question=request.question,
+    response_type="rag_answer",
+    rag_results=rag_results,
+    llm_response=llm_response,
+    school_id=school_id,
+    school_name=school_name,
+    sources=sources
+)
 
 
 # ============================================================

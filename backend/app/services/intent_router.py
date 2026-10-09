@@ -2,20 +2,38 @@ from enum import Enum
 
 
 class Intent(str, Enum):
+    GREETING = "greeting"
     SQL = "sql"
     RAG = "rag"
     SQL_AND_RAG = "sql_and_rag"
     GENERAL = "general"
 
 
-def detect_intent(question: str) -> Intent:
+def detect_intent(question: str):
+    q = question.lower().strip()
 
-    question_lower = question.lower()
+    # -------------------------
+    # GREETING
+    # -------------------------
+    greeting_words = [
+        "hi",
+        "hii",
+        "hiii",
+        "hello",
+        "hey",
+        "heyy",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "good night",
+    ]
 
-    # ==========================================
-    # SQL QUESTIONS
-    # ==========================================
+    if q in greeting_words:
+        return Intent.GREETING
 
+    # -------------------------
+    # SQL / SCHOOL LIST
+    # -------------------------
     sql_keywords = [
         "schools in",
         "schools near",
@@ -30,10 +48,9 @@ def detect_intent(question: str) -> Intent:
         "school names",
     ]
 
-    # ==========================================
-    # RAG QUESTIONS
-    # ==========================================
-
+    # -------------------------
+    # RAG / PDF INFORMATION
+    # -------------------------
     rag_keywords = [
         "admission",
         "fee",
@@ -56,39 +73,16 @@ def detect_intent(question: str) -> Intent:
         "about the school",
     ]
 
-    has_sql = any(
-        keyword in question_lower
-        for keyword in sql_keywords
-    )
-
-    has_rag = any(
-        keyword in question_lower
-        for keyword in rag_keywords
-    )
-
-    # ==========================================
-    # SQL + RAG
-    # ==========================================
+    has_sql = any(keyword in q for keyword in sql_keywords)
+    has_rag = any(keyword in q for keyword in rag_keywords)
 
     if has_sql and has_rag:
         return Intent.SQL_AND_RAG
 
-    # ==========================================
-    # SQL ONLY
-    # ==========================================
-
     if has_sql:
         return Intent.SQL
 
-    # ==========================================
-    # RAG ONLY
-    # ==========================================
-
     if has_rag:
         return Intent.RAG
-
-    # ==========================================
-    # GENERAL
-    # ==========================================
 
     return Intent.GENERAL

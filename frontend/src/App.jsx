@@ -1,6 +1,8 @@
 import { useState } from "react";
 import "./App.css";
 
+const API_URL = "http://127.0.0.1:8000";
+
 function App() {
   const [messages, setMessages] = useState([
     {
@@ -11,19 +13,68 @@ function App() {
   ]);
 
   const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const sendMessage = () => {
-    if (!input.trim()) return;
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
 
-    const userMessage = {
-      role: "user",
-      content: input,
-    };
+    const question = input.trim();
 
-    setMessages((prev) => [...prev, userMessage]);
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: "user",
+        content: question,
+      },
+    ]);
+
     setInput("");
+    setLoading(true);
 
-    // Backend connection will be added next.
+    try {
+      const response = await fetch(`${API_URL}/chat/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: question,
+          session_id: "frontend-session-001",
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Backend API request failed");
+      }
+
+      const data = await response.json();
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: data.llm_response,
+          responseType: data.response_type,
+          schools: data.schools || [],
+          ragResults: data.rag_results || [],
+          sources: data.sources || [],
+          schoolName: data.school_name || null,
+        },
+      ]);
+    } catch (error) {
+      console.error("API Error:", error);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content:
+            "Sorry, I couldn't connect to the AI Assistant. Please try again.",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -56,11 +107,127 @@ function App() {
                 {message.role === "assistant" ? "🤖" : "👤"}
               </div>
 
-              <div className="message">
-                {message.content}
+              <div className="message-content">
+
+                {/* Normal answer */}
+                {message.content && (
+                  <div className="message">
+                    {message.content}
+                  </div>
+                )}
+
+                {/* School Cards */}
+                {message.role === "assistant" &&
+                  message.schools &&
+                  message.schools.length > 0 && (
+                    <div className="school-section">
+                      <h3>🏫 Schools</h3>
+
+                      <div className="school-grid">
+                        {message.schools.map((school) => (
+                          <div
+                            className="school-card"
+                            key={school.id}
+                          >
+                            <h3>{school.name}</h3>
+
+                            {school.address && (
+                              <p>
+                                <strong>📍 Address:</strong>{" "}
+                                {school.address}
+                              </p>
+                            )}
+
+                            {school.city && (
+                              <p>
+                                <strong>🏙️ City:</strong>{" "}
+                                {school.city}
+                              </p>
+                            )}
+
+                            {school.state && (
+                              <p>
+                                <strong>📌 State:</strong>{" "}
+                                {school.state}
+                              </p>
+                            )}
+
+                            {school.phone && (
+                              <p>
+                                <strong>📞 Phone:</strong>{" "}
+                                {school.phone}
+                              </p>
+                            )}
+
+                            {school.email && (
+                              <p>
+                                <strong>✉️ Email:</strong>{" "}
+                                {school.email}
+                              </p>
+                            )}
+
+                            {school.website && (
+                              <a
+                                href={school.website}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="website-button"
+                              >
+                                🌐 Visit Website
+                              </a>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                {/* RAG Sources */}
+                {message.role === "assistant" &&
+                  message.sources &&
+                  message.sources.length > 0 && (
+                    <div className="sources-section">
+                      <h3>📚 Sources</h3>
+
+                      {message.sources.map((source, sourceIndex) => (
+                        <div
+                          className="source-card"
+                          key={sourceIndex}
+                        >
+                          <p>
+                            📄 Document ID:{" "}
+                            {source.document_id}
+                          </p>
+
+                          <p>
+                            🏫 School ID:{" "}
+                            {source.school_id}
+                          </p>
+
+                          {source.page_number && (
+                            <p>
+                              📖 Page:{" "}
+                              {source.page_number}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
               </div>
             </div>
           ))}
+
+          {/* Loading */}
+          {loading && (
+            <div className="message-row assistant">
+              <div className="avatar">🤖</div>
+
+              <div className="message">
+                Thinking...
+              </div>
+            </div>
+          )}
         </main>
 
         {/* Input */}
@@ -69,6 +236,7 @@ function App() {
             type="text"
             placeholder="Ask about schools, admissions, fees, facilities..."
             value={input}
+            disabled={loading}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -77,8 +245,11 @@ function App() {
             }}
           />
 
-          <button onClick={sendMessage}>
-            Send
+          <button
+            onClick={sendMessage}
+            disabled={loading}
+          >
+            {loading ? "..." : "Send"}
           </button>
         </div>
 
