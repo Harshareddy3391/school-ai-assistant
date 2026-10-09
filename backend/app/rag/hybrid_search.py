@@ -1,3 +1,4 @@
+
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -7,99 +8,42 @@ def vector_similarity_search(
     query_embedding: list[float],
     school_id: int | None = None,
     school_ids: list[int] | None = None,
-    top_k: int = 5
+    top_k: int = 10,
 ) -> list[dict]:
+    conditions = ["embedding IS NOT NULL"]
+    params = {
+        "query_embedding": str(query_embedding),
+        "top_k": top_k,
+    }
 
     if school_ids:
-
-        sql = text("""
-            SELECT
-                id,
-                document_id,
-                school_id,
-                content,
-                page_number,
-                section,
-                metadata_json,
-                1 - (
-                    embedding <=> CAST(:query_embedding AS vector)
-                ) AS similarity
-            FROM document_chunks
-            WHERE school_id = ANY(:school_ids)
-              AND embedding IS NOT NULL
-            ORDER BY embedding <=> CAST(:query_embedding AS vector)
-            LIMIT :top_k
-        """)
-
-        params = {
-            "query_embedding": str(query_embedding),
-            "school_ids": school_ids,
-            "top_k": top_k
-        }
-
+        conditions.append("school_id = ANY(:school_ids)")
+        params["school_ids"] = school_ids
     elif school_id is not None:
+        conditions.append("school_id = :school_id")
+        params["school_id"] = school_id
 
-        sql = text("""
-            SELECT
-                id,
-                document_id,
-                school_id,
-                content,
-                page_number,
-                section,
-                metadata_json,
-                1 - (
-                    embedding <=> CAST(:query_embedding AS vector)
-                ) AS similarity
-            FROM document_chunks
-            WHERE school_id = :school_id
-              AND embedding IS NOT NULL
-            ORDER BY embedding <=> CAST(:query_embedding AS vector)
-            LIMIT :top_k
-        """)
+    sql = text(f"""
+        SELECT
+            id,
+            document_id,
+            school_id,
+            school_name,
+            city,
+            content,
+            page_number,
+            pdf_filename,
+            metadata_json,
+            1 - (embedding <=> CAST(:query_embedding AS vector))
+                AS similarity
+        FROM public.school_knowledge
+        WHERE {" AND ".join(conditions)}
+        ORDER BY embedding <=> CAST(:query_embedding AS vector)
+        LIMIT :top_k
+    """)
 
-        params = {
-            "query_embedding": str(query_embedding),
-            "school_id": school_id,
-            "top_k": top_k
-        }
-
-    else:
-
-        sql = text("""
-            SELECT
-                id,
-                document_id,
-                school_id,
-                content,
-                page_number,
-                section,
-                metadata_json,
-                1 - (
-                    embedding <=> CAST(:query_embedding AS vector)
-                ) AS similarity
-            FROM document_chunks
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> CAST(:query_embedding AS vector)
-            LIMIT :top_k
-        """)
-
-        params = {
-            "query_embedding": str(query_embedding),
-            "top_k": top_k
-        }
-
-    result = db.execute(
-        sql,
-        params
-    )
-
-    rows = result.mappings().all()
-
-    return [
-        dict(row)
-        for row in rows
-    ]
+    rows = db.execute(sql, params).mappings().all()
+    return [dict(row) for row in rows]
 
 
 def keyword_search(
@@ -107,105 +51,59 @@ def keyword_search(
     query: str,
     school_id: int | None = None,
     school_ids: list[int] | None = None,
-    top_k: int = 5
+    top_k: int = 10,
 ) -> list[dict]:
+    conditions = [
+        """
+        to_tsvector(
+            'english',
+            coalesce(content, '') || ' ' ||
+            coalesce(school_name, '') || ' ' ||
+            coalesce(city, '')
+        ) @@ plainto_tsquery('english', :query)
+        """
+    ]
+
+    params = {
+        "query": query,
+        "top_k": top_k,
+    }
 
     if school_ids:
-
-        sql = text("""
-            SELECT
-                id,
-                document_id,
-                school_id,
-                content,
-                page_number,
-                section,
-                metadata_json,
-                ts_rank(
-                    to_tsvector('english', content),
-                    plainto_tsquery('english', :query)
-                ) AS keyword_score
-            FROM document_chunks
-            WHERE school_id = ANY(:school_ids)
-              AND to_tsvector('english', content)
-                  @@ plainto_tsquery('english', :query)
-            ORDER BY keyword_score DESC
-            LIMIT :top_k
-        """)
-
-        params = {
-            "query": query,
-            "school_ids": school_ids,
-            "top_k": top_k
-        }
-
+        conditions.append("school_id = ANY(:school_ids)")
+        params["school_ids"] = school_ids
     elif school_id is not None:
+        conditions.append("school_id = :school_id")
+        params["school_id"] = school_id
 
-        sql = text("""
-            SELECT
-                id,
-                document_id,
-                school_id,
-                content,
-                page_number,
-                section,
-                metadata_json,
-                ts_rank(
-                    to_tsvector('english', content),
-                    plainto_tsquery('english', :query)
-                ) AS keyword_score
-            FROM document_chunks
-            WHERE school_id = :school_id
-              AND to_tsvector('english', content)
-                  @@ plainto_tsquery('english', :query)
-            ORDER BY keyword_score DESC
-            LIMIT :top_k
-        """)
+    sql = text(f"""
+        SELECT
+            id,
+            document_id,
+            school_id,
+            school_name,
+            city,
+            content,
+            page_number,
+            pdf_filename,
+            metadata_json,
+            ts_rank(
+                to_tsvector(
+                    'english',
+                    coalesce(content, '') || ' ' ||
+                    coalesce(school_name, '') || ' ' ||
+                    coalesce(city, '')
+                ),
+                plainto_tsquery('english', :query)
+            ) AS keyword_score
+        FROM public.school_knowledge
+        WHERE {" AND ".join(conditions)}
+        ORDER BY keyword_score DESC
+        LIMIT :top_k
+    """)
 
-        params = {
-            "query": query,
-            "school_id": school_id,
-            "top_k": top_k
-        }
-
-    else:
-
-        sql = text("""
-            SELECT
-                id,
-                document_id,
-                school_id,
-                content,
-                page_number,
-                section,
-                metadata_json,
-                ts_rank(
-                    to_tsvector('english', content),
-                    plainto_tsquery('english', :query)
-                ) AS keyword_score
-            FROM document_chunks
-            WHERE to_tsvector('english', content)
-                  @@ plainto_tsquery('english', :query)
-            ORDER BY keyword_score DESC
-            LIMIT :top_k
-        """)
-
-        params = {
-            "query": query,
-            "top_k": top_k
-        }
-
-    result = db.execute(
-        sql,
-        params
-    )
-
-    rows = result.mappings().all()
-
-    return [
-        dict(row)
-        for row in rows
-    ]
+    rows = db.execute(sql, params).mappings().all()
+    return [dict(row) for row in rows]
 
 
 def hybrid_search(
@@ -214,15 +112,14 @@ def hybrid_search(
     query_embedding: list[float],
     school_id: int | None = None,
     school_ids: list[int] | None = None,
-    top_k: int = 5
+    top_k: int = 10,
 ) -> list[dict]:
-
     vector_results = vector_similarity_search(
         db=db,
         query_embedding=query_embedding,
         school_id=school_id,
         school_ids=school_ids,
-        top_k=top_k
+        top_k=top_k,
     )
 
     keyword_results = keyword_search(
@@ -230,74 +127,53 @@ def hybrid_search(
         query=query,
         school_id=school_id,
         school_ids=school_ids,
-        top_k=top_k
+        top_k=top_k,
     )
 
-    combined_results = {}
+    combined = {}
 
     for result in vector_results:
-
         chunk_id = result["id"]
-
-        combined_results[chunk_id] = {
+        combined[chunk_id] = {
             **result,
-            "vector_score": float(
-                result["similarity"]
-            ),
-            "keyword_score": 0.0
+            "vector_score": float(result["similarity"]),
+            "keyword_score": 0.0,
         }
 
     for result in keyword_results:
-
         chunk_id = result["id"]
 
-        if chunk_id in combined_results:
-
-            combined_results[
-                chunk_id
-            ]["keyword_score"] = float(
+        if chunk_id in combined:
+            combined[chunk_id]["keyword_score"] = float(
                 result["keyword_score"]
             )
-
         else:
-
-            combined_results[chunk_id] = {
+            combined[chunk_id] = {
                 **result,
                 "vector_score": 0.0,
-                "keyword_score": float(
-                    result["keyword_score"]
-                )
+                "keyword_score": float(result["keyword_score"]),
             }
 
-    max_keyword_score = max(
-        (
-            result["keyword_score"]
-            for result in combined_results.values()
-        ),
-        default=0.0
+    max_keyword = max(
+        (item["keyword_score"] for item in combined.values()),
+        default=0.0,
     )
 
-    if max_keyword_score > 0:
-
-        for result in combined_results.values():
-
-            result["keyword_score"] = (
-                result["keyword_score"]
-                / max_keyword_score
-            )
-
-    for result in combined_results.values():
-
-        result["hybrid_score"] = (
-            0.7 * result["vector_score"]
-            +
-            0.3 * result["keyword_score"]
+    for item in combined.values():
+        normalized_keyword = (
+            item["keyword_score"] / max_keyword
+            if max_keyword > 0
+            else 0.0
         )
 
-    ranked_results = sorted(
-        combined_results.values(),
-        key=lambda item: item["hybrid_score"],
-        reverse=True
-    )
+        item["keyword_score"] = normalized_keyword
+        item["hybrid_score"] = (
+            0.7 * item["vector_score"]
+            + 0.3 * normalized_keyword
+        )
 
-    return ranked_results[:top_k]
+    return sorted(
+        combined.values(),
+        key=lambda item: item["hybrid_score"],
+        reverse=True,
+    )[:top_k]

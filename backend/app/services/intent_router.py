@@ -1,88 +1,77 @@
+
 from enum import Enum
+
+from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+
+from app.core.config import settings
 
 
 class Intent(str, Enum):
-    GREETING = "greeting"
-    SQL = "sql"
-    RAG = "rag"
-    SQL_AND_RAG = "sql_and_rag"
     GENERAL = "general"
+    SCHOOL_SEARCH = "school_search"
+    SCHOOL_KNOWLEDGE = "school_knowledge"
+    SCHOOL_SEARCH_AND_KNOWLEDGE = "school_search_and_knowledge"
 
 
-def detect_intent(question: str):
-    q = question.lower().strip()
+class IntentDecision(BaseModel):
+    intent: Intent = Field(
+        description="The most appropriate intent for the user's message"
+    )
 
-    # -------------------------
-    # GREETING
-    # -------------------------
-    greeting_words = [
-        "hi",
-        "hii",
-        "hiii",
-        "hello",
-        "hey",
-        "heyy",
-        "good morning",
-        "good afternoon",
-        "good evening",
-        "good night",
-    ]
 
-    if q in greeting_words:
-        return Intent.GREETING
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0,
+    api_key=settings.OPENAI_API_KEY,
+)
 
-    # -------------------------
-    # SQL / SCHOOL LIST
-    # -------------------------
-    sql_keywords = [
-        "schools in",
-        "schools near",
-        "school in",
-        "school near",
-        "schools located",
-        "list schools",
-        "show schools",
-        "find schools",
-        "how many schools",
-        "which schools",
-        "school names",
-    ]
+intent_classifier = llm.with_structured_output(IntentDecision)
 
-    # -------------------------
-    # RAG / PDF INFORMATION
-    # -------------------------
-    rag_keywords = [
-        "admission",
-        "fee",
-        "fees",
-        "documents",
-        "facilities",
-        "curriculum",
-        "subjects",
-        "activities",
-        "transport",
-        "hostel",
-        "library",
-        "laboratory",
-        "sports",
-        "timings",
-        "rules",
-        "eligibility",
-        "procedure",
-        "requirements",
-        "about the school",
-    ]
 
-    has_sql = any(keyword in q for keyword in sql_keywords)
-    has_rag = any(keyword in q for keyword in rag_keywords)
+def detect_intent(
+    question: str,
+    conversation_history: str = "",
+) -> Intent:
+    prompt = f"""
+Classify the user's latest message based on its meaning and conversation context.
 
-    if has_sql and has_rag:
-        return Intent.SQL_AND_RAG
+Choose exactly one intent:
 
-    if has_sql:
-        return Intent.SQL
+1. general:
+   Normal conversation, greetings, personal statements, thanks,
+   general questions, or topics unrelated to finding schools or
+   information in school documents.
 
-    if has_rag:
-        return Intent.RAG
+2. school_search:
+   The user wants to find, list, filter, or locate schools.
+   Examples: schools in Chennai, schools near Bangalore,
+   list schools in Hyderabad.
 
-    return Intent.GENERAL
+3. school_knowledge:
+   The user asks for specific information from school documents.
+   Examples: admission process, fees, eligibility, facilities,
+   required documents, school timings, or transport.
+
+4. school_search_and_knowledge:
+   The user wants to find schools AND compare or retrieve
+   information about those schools.
+   Examples: find schools in Chennai and compare their fees.
+
+Use the conversation history to interpret follow-up questions.
+For example, "What about its fees?" may refer to a school
+discussed earlier and should be classified as school_knowledge.
+
+Do not classify a message as school-related merely because it
+contains a common word that appeared in an earlier school question.
+Classify based on the user's actual meaning.
+
+Conversation history:
+{conversation_history or "No previous conversation"}
+
+Latest user message:
+{question}
+"""
+
+    result = intent_classifier.invoke(prompt)
+    return result.intent

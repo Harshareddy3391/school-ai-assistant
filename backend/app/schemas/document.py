@@ -1,23 +1,11 @@
-from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
-
-
-class DocumentBase(BaseModel):
-    filename: str
-    file_path: str
-    document_type: str | None = None
+from pydantic import BaseModel
 
 
-class DocumentCreate(DocumentBase):
+class DocumentUploadResponse(BaseModel):
+    message: str
     school_id: int
-
-
-class DocumentResponse(DocumentBase):
-    id: int
-    school_id: int
-    created_at: datetime
-
-    model_config = ConfigDict(
-        from_attributes=True
-    )
+    school_name: str
+    pdf_filename: str
+    chunks_created: int
+    embeddings_created: int
