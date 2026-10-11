@@ -358,16 +358,20 @@ def chat(
 
     _save_conversation(session_id, question, answer)
 
+
     return ChatResponse(
-        question=question,
-        response_type=(
-            "sql_and_rag"
-            if intent == Intent.SCHOOL_SEARCH_AND_KNOWLEDGE
-            else "rag_answer"
-        ),
-        llm_response=answer,
-        rag_results=rag_results,
-        school_id=selected_school_id,
-        school_name=selected_school_name,
-        sources=sources,
-    )
+    question=question,
+    response_type=(
+        "sql_and_rag"
+        if intent == Intent.SCHOOL_SEARCH_AND_KNOWLEDGE
+        else "rag_answer"
+    ),
+    llm_response=answer,
+    rag_results=rag_results,
+    school_id=selected_school_id,
+    school_name=selected_school_name,
+    sources=[],
+)
+
+
+    
